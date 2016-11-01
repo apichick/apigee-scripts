@@ -1,0 +1,38 @@
+#!/bin/bash
+
+POLICIES=("AccessControl" "AccessEntity" "AssignMessage" "BasicAuthentication" "ConcurrentRateLimit" "ExtractVariables" "GetOAuthV2Info" "InvalidateCache" "JavaCallout" "Javascript" "JSONToXML" "KeyValueMapOperations" "Ldap" "LookupCache" "MessageLogging" "MessageValidation" "OAuthV2" "PopulateCache" "Quota" "RegularExpressionProtection" "ResponseCache" "ServiceCallout" "SetOAuthV2Info" "SpikeArrest" "VerifyAPIKey" "XSL" "XMLToJSON")
+
+if [[ $# -gt 0 ]]; then
+    policy=$1
+    if [[ ! ${POLICIES[@]} =~ ${policy} ]]; then
+        echo "Invalid policy ${policy}" 1>&2
+        exit 1
+    fi
+else
+    PS3="Choose a policy: "
+    select policy in ${POLICIES[@]}; do
+        if [[ ${POLICIES[@]} =~ ${policy} ]]; then
+            break
+        fi
+    done
+fi
+
+if [[ "${policy}" == "OAuthV2"  ]]; then
+    section="content"
+else
+    section="reference"
+fi
+
+if [[ "${policy}" =~ "XSL" ]]; then
+    policy="${policy}Transform"
+fi
+
+policy=$(echo $policy | sed -e 's/To//g' -e 's/XML/Xml/g' -e 's/JSON/Json/g' -e 's/XSL/Xsl/g' -e 's/OAuthV2/Oauthv2/g' -e 's/API/Api/g')
+
+path_segment=$(echo $policy | sed 's/\(.\)\([A-Z]\)/\1-\2/g' | tr '[:upper:]' '[:lower:]')
+
+if [[ ! "${policy}" =~ "RegularExpressionProtection" ]]; then
+    path_segment=${path_segment}"-policy"
+fi
+
+open "http://docs.apigee.com/api-services/${section}/${path_segment}"

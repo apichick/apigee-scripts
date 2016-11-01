@@ -1,0 +1,252 @@
+#!/bin/bash
+trap "exit 1" TERM
+export TOP_PID=$$
+
+function print_error_report {
+    code=$1
+    message=$2
+    printf "\n\t********************************************************************************\n"
+    printf "\t ${code}\n"
+    printf "\t********************************************************************************\n"
+    printf "${message}\n\n" | fold -w 80 -s | awk '{print "\t"$0}'
+}
+
+function print_operation_result {
+    local code=$1
+    local must_exit=1
+    if [[ $# -eq 2 ]]; then
+        must_exit=$2
+    fi
+    if [ ${code} -eq 0 ]; then
+		printf "\033[1;32mOK\033[0m\n"
+	else
+		printf "\033[1;31mKO\033[0m\n"
+        if [[ ${must_exit} -eq 1 ]]; then
+            kill -s TERM $TOP_PID
+        fi
+	fi
+}
+
+function copy_dir_to_target {
+    local dir_name=$1
+    if [[ -d ${base_dir}/${dir_name} ]]; then
+        printf "Copying \033[1;34m${dir_name}\033[0m to target..."
+        cp -R ${base_dir}/${dir_name} ${target_dir}
+        print_operation_result $?
+    fi
+}
+
+function replace_tokens_in_directory {
+    local includes=("xml" "js" "properties" "java" "json" "feature")
+    local dir_name=$1
+    local config_file="${base_dir}/settings_${ENVIRONMENT}.conf"
+    local args=""
+    if [[ -d ${base_dir}/${dir_name} ]]; then
+        printf "Replacing configuration tokens in \033[1;34m${dir_name}\033[0m directory..."
+        if [[ -f ${config_file} ]]; then
+            while IFS='=' read -r key value
+            do
+                args=$args" -e s#\${${key}}#${value}#g"
+            done < "${config_file}"
+        fi
+        args=$args" -e s#\${apigee.username}#"${USERNAME}"#g"
+        args=$args" -e s#\${apigee.password}#"${PASSWORD}"#g"
+        args=$args" -e s#\${apigee.hosturl}#"${HOSTURL}"#g"
+        args=$args" -e s#\${apigee.apiversion}#"${APIVERSION}"#g"
+        args=$args" -e s#\${apigee.org}#"${ORGANIZATION}"#g"
+        args=$args" -e s#\${apigee.env}#"${ENVIRONMENT}"#g"
+        if [[ ${LIVE_DEPLOYMENT} -eq 0 ]]; then
+            args=$args" -e s#\${apiproxy.deploymentSuffix}#"${DEPLOYMENT_SUFFIX}"#g"
+        else
+            args=$args" -e s#\${apiproxy.deploymentSuffix}##g"
+        fi
+        files=($(find -E ${target_dir}/${dir_name} -type f  -not -path "**/node_modules/*" -regex ".*\.("$(echo ${includes[*]} | sed 's/ /|/g')")"))
+        for file in ${files[@]}; do
+            cp $file $file.tmp
+            cat ${file}.tmp | sed ${args} > ${file}
+            rm $file.tmp
+        done
+        print_operation_result $?
+    fi
+}
+
+function jshint {
+    check_command_exists "jshint"
+    command jshint $@
+}
+
+function mocha {
+    check_command_exists "mocha"
+    command mocha $@
+}
+
+function cucumber-js {
+    check_command_exists "cucumber-js"
+    command cucumber-js $@
+}
+
+function validate_js {
+    check_command_exists "jshint"
+    printf "Validating javascript files in \033[1;34m"$(basename $(pwd))"\033[0m directory..."
+    local result=$(jshint --exclude node_modules .)
+    status=$?
+    print_operation_result ${status} 0
+    if [[ ${status} -ne 0 ]]; then
+        print_error_report "JAVASCRIPT VALIDATION FAILED" "${result}"
+        kill -s TERM $TOP_PID
+    fi
+}
+
+function prepare_node_apps {
+    local root_dir=$1
+    local node_app_dirs=($(find ${root_dir} -type f -name "package.json" -not -path "**/node_modules/*" -exec dirname {} \;))
+    for dir in ${node_app_dirs[@]}; do
+        local dir_name=$(basename ${dir})
+        printf "Installing node dependencies in \033[1;34m${dir_name}\033[0m directory..."
+        pushd ${dir} > /dev/null
+        npm install &> /dev/null
+        print_operation_result $?
+        if [[ "${dir_name}" != "test" ]]; then
+            printf "Zipping node_modules in \033[1;34m${dir_name}\033[0m directory..."
+            zip -q -r node_modules.zip node_modules
+            print_operation_result $?
+            rm -rf node_modules
+        fi
+        validate_js
+        popd > /dev/null
+    done
+}
+
+script_dir=$(dirname $0)
+
+. ${script_dir}/edge-setenv.sh
+. ${script_dir}/operations.sh
+. ${script_dir}/edge-operations.sh
+
+base_dir=$1
+
+if [ -z ${base_dir} ]; then
+    echo "Missing API proxy location" >&2
+    exit 1
+fi
+
+target_dir=${base_dir}/target
+
+if [ -z ${PROXY_NAME} ]; then
+    pushd ${base_dir} > /dev/null
+    PROXY_NAME=$(basename $(pwd))
+    if [[ ${LIVE_DEPLOYMENT} -eq 0 ]]; then
+        PROXY_NAME=${PROXY_NAME}${DEPLOYMENT_SUFFIX}
+    fi
+    popd > /dev/null
+fi
+
+VALID_ACTIONS=("update" "override")
+
+if [ -z ${ACTION} ]; then
+    ACTION="override"
+fi
+
+if [[ ! ${VALID_ACTIONS[@]} =~ ${ACTION} ]]; then
+	echo "Invalid action: ${ACTION}. Possible values: "$(echo ${VALID_ACTIONS[*]} | sed 's/ /|/g')
+	exit 1
+fi
+
+printf "Cleaning \033[1;34mtarget\033[0m directory..."
+rm -rf ${target_dir}
+print_operation_result $?
+printf "Creating \033[1;34mtarget\033[0m directory..."
+mkdir ${target_dir}
+print_operation_result $?
+
+if [[ ${TESTS_ONLY} -eq 0 ]]; then
+    copy_dir_to_target "apiproxy"
+fi
+
+copy_dir_to_target "test"
+
+if [[ ${TESTS_ONLY} -eq 0 ]]; then
+    replace_tokens_in_directory "apiproxy"
+fi
+
+replace_tokens_in_directory "test"
+
+if [ ${TESTS_ONLY} -eq 0 -a -d ${target_dir}/apiproxy/resources/jsc ]; then
+    pushd ${target_dir}/apiproxy/resources/jsc > /dev/null
+    validate_js
+    popd > /dev/null
+fi
+
+if [[ ${TESTS_ONLY} -eq 0 ]]; then
+    prepare_node_apps ${target_dir}
+else
+    pushd ${target_dir}/test > /dev/null
+    npm install &> /dev/null
+    validate_js
+    popd > /dev/null
+fi
+if [[ -d test/unit ]]; then
+    printf "Running unit tests...\n"
+    NODE_PATH=apiproxy/resources/jsc mocha test/unit
+else
+    printf "No unit tests to run.\n"
+fi
+pushd ${target_dir} > /dev/null
+if [[ ${TESTS_ONLY} -eq 0 ]]; then
+    printf "Zipping \033[1;34mapiproxy\033[0m..."
+    zip -q -r apiproxy.zip apiproxy
+    print_operation_result $?
+    printf "Getting deployed revision for proxy \033[1;34m${PROXY_NAME}\033[0m..."
+    revision=$(get_api_deployed_revision_in_env ${PROXY_NAME})
+    print_operation_result $?
+    was_deployed=1
+    if [[ -z ${revision} ]]; then
+        printf "Nothing is deployed yet\n"
+        was_deployed=0
+        ACTION="override"
+    else
+        printf "Deployed revision: ${revision}\n"
+    fi
+    case ${ACTION} in
+        override)
+            printf "Importing API proxy \033[1;34m${PROXY_NAME}\033[0m..."
+            result=$(import_api ${PROXY_NAME} "apiproxy.zip")
+            status=$?
+            print_operation_result ${status} 0
+            if [[ ${status} -ne 0 ]]; then
+                message=$(echo ${result} | jq -r '.message')
+                print_error_report "IMPORT FAILED" "${message}"
+                exit 1
+            else
+                revision=${result}
+                printf "Deploying revision \033[1;34m${revision}\033[0m of API proxy \033[1;34m${PROXY_NAME}\033[0m..."
+                result=$(deploy_api_revision ${PROXY_NAME} ${revision} ${was_deployed})
+                status=$?
+                print_operation_result ${status} 0
+                if [[ ${status} -ne 0 ]]; then
+                    message=$(echo ${result} | jq -r '.message')
+                    print_error_report "DEPLOYMENT FAILED" "${message}"
+					exit 1
+                fi
+            fi
+            ;;
+        update)
+            printf "Updating revision \033[1;34m${revision}\033[0m API proxy \033[1;34m${PROXY_NAME}\033[0m..."
+            result=$(update_api_revision ${PROXY_NAME} "apiproxy.zip" ${revision})
+            status=$?
+            print_operation_result ${status} 0
+            if [[ ${status} -ne 0 ]]; then
+                message=$(echo ${result} | jq -r '.message')
+                print_error_report "UPDATE FAILED" "${message}"
+                exit 1
+            fi
+            ;;
+    esac
+fi
+if [[ -d test/integration ]]; then
+    printf "Running integration tests...\n"
+    cucumber-js test/integration
+else
+    printf "No integration tests to run.\n"
+fi
+popd > /dev/null

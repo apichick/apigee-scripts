@@ -1,0 +1,11 @@
+#!/bin/bash
+
+script_dir=$(dirname $0)
+
+. ${script_dir}/edge-setenv.sh
+. ${script_dir}/operations.sh
+. ${script_dir}/edge-operations.sh
+
+content=$(cat /dev/stdin)
+
+load_env_info "${content}"

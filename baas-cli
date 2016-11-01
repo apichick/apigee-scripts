@@ -1,0 +1,105 @@
+#!/bin/bash
+
+script_dir=$(dirname $0)
+
+. ${script_dir}/baas-setenv.sh
+. ${script_dir}/operations.sh
+. ${script_dir}/baas-operations.sh
+
+if [ -z ${RESOURCE} ]; then
+	echo "Missing mandatory option -r <resource>" >&2
+    exit 1
+fi
+
+VALID_RESOURCES=("app" "collection" "entity")
+
+if [[ ! ${VALID_RESOURCES[@]} =~ ${RESOURCE} ]]; then
+	echo "Invalid resource: ${RESOURCE}. Possible values: "$(echo ${VALID_RESOURCES[*]} | sed 's/ /|/g')
+	exit 1
+fi
+
+APP_VALID_ACTIONS=("create" "get_credentials" "list")
+COLLECTION_VALID_ACTIONS=("create" "list")
+ENTITY_VALID_ACTIONS=("list")
+
+prefix="$(echo ${RESOURCE} | tr '[:lower:]' '[:upper:]')"
+var=${prefix}_VALID_ACTIONS[@]
+VALID_ACTIONS=${!var}
+
+if [ -z ${ACTION} ]; then
+	echo "Missing mandatory option -a <action>" >&2
+    exit 1
+fi
+
+if [[ ! ${VALID_ACTIONS[@]} =~ ${ACTION} ]]; then
+	echo "Invalid action ${ACTION} for ${RESOURCE}. Possible actions: "$(echo ${VALID_ACTIONS[*]} | sed 's/ /|/g')
+	exit 1
+fi
+
+function select_app {
+    app_names=($(get_app_names))
+    options=(${app_names[@]})
+    options+=("QUIT")
+    PS3="Please select an app: "
+    select app_name in ${app_names[@]}; do
+        if [[ ${app_names[@]} =~ ${app_name} ]]; then
+            break
+        fi
+    done
+    echo ${app_name}
+}
+
+function select_collection {
+    app_name=$1
+    collection_names=($(get_collection_names ${app_name}))
+    options=(${collection_names[@]})
+    options+=("QUIT")
+    PS3="Please select a collection: "
+    select collection_name in ${collection_names[@]}; do
+        if [[ ${collection_names[@]} =~ ${collection_name} ]]; then
+            break
+        fi
+    done
+    echo ${collection_name}
+}
+
+
+case ${RESOURCE} in
+    app)
+        case ${ACTION} in
+            create)
+                read -p "Enter name: " app_name
+                create_app ${app_name}
+                ;;
+            get_credentials)
+                app_name=$(select_app)
+                get_app_credentials ${app_name}
+                ;;
+            list)
+                get_apps
+                ;;
+        esac
+        ;;
+    collection)
+        case ${ACTION} in
+            create)
+                app_name=$(select_app)
+                read -p "Enter name: " collection_name
+                create_collection ${app_name} ${collection_name}
+                ;;
+            list)
+                app_name=$(select_app)
+                get_collections ${app_name}
+                ;;
+        esac
+        ;;
+    entity)
+        case ${ACTION} in
+            list)
+                app_name=$(select_app)
+                collection_name=$(select_collection ${app_name})
+                get_entities ${app_name} ${collection_name}
+                ;;
+        esac
+        ;;
+esac

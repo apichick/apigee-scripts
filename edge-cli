@@ -1,0 +1,99 @@
+#!/bin/bash
+
+script_dir=$(dirname $0)
+
+. ${script_dir}/edge-setenv.sh
+. ${script_dir}/operations.sh
+. ${script_dir}/edge-operations.sh
+
+if [ -z ${RESOURCE} ]; then
+	echo "Missing mandatory option -r <resource>" >&2
+    exit 1
+fi
+
+VALID_RESOURCES=("api" "apiproduct" "developerapp" "cache" "company" "companyapp" "deployment" "developer" "environment" "keyvaluemap" "vault" "virtualhost" "targetserver" "keystore" "resource")
+
+if [[ ! ${VALID_RESOURCES[@]} =~ ${RESOURCE} ]]; then
+	echo "Invalid resource: ${RESOURCE}. Possible values: "$(echo ${VALID_RESOURCES[*]} | sed 's/ /|/g')
+	exit 1
+fi
+
+API_VALID_ACTIONS=("delete" "fetch" "list" "undeploy")
+APIPRODUCT_VALID_ACTIONS=("create" "delete" "fetch" "list")
+DEVELOPERAPP_VALID_ACTIONS=("create" "delete" "fetch" "list")
+CACHE_VALID_ACTIONS=("clear_entry" "clear_entries" "create" "delete" "fetch" "list")
+COMPANY_VALID_ACTIONS=("create" "delete" "list")
+COMPANYAPP_VALID_ACTIONS=("list")
+KEYVALUEMAP_VALID_ACTIONS=("create" "create_entry" "delete" "delete_entry" "fetch" "list")
+VAULT_VALID_ACTIONS=("create" "create_entry" "delete" "delete_entry" "fetch" "list")
+VIRTUALHOST_VALID_ACTIONS=("create" "delete" "fetch" "list")
+TARGETSERVER_VALID_ACTIONS=("create" "delete" "fetch" "list")
+KEYSTORE_VALID_ACTIONS=("create" "delete" "fetch" "list")
+DEVELOPER_VALID_ACTIONS=("create" "delete" "fetch" "list")
+RESOURCE_VALID_ACTIONS=("fetch" "list")
+ENVIRONMENT_VALID_ACTIONS=("fetch" "list")
+DEPLOYMENT_VALID_ACTIONS=("list")
+
+prefix="$(echo ${RESOURCE} | tr '[:lower:]' '[:upper:]')"
+var=${prefix}_VALID_ACTIONS[@]
+VALID_ACTIONS=${!var}
+
+if [[ -z ${ACTION} ]]; then
+	echo "Missing mandatory option -a <action>" >&2
+    exit 1
+fi
+
+if [[ ! ${VALID_ACTIONS[@]} =~ ${ACTION} ]]; then
+	echo "Invalid action ${ACTION} for ${RESOURCE}. Possible actions: "$(echo ${VALID_ACTIONS[*]} | sed 's/ /|/g')
+	exit 1
+fi
+
+case ${ACTION} in
+    clear_entry)
+        resource_name=$(select_resource ${RESOURCE})
+        read -p "Enter entry name: " entry_name
+        clear_cache_entry ${resource[$i]} ${entry_name}
+        ;;
+    clear_entries)
+        clear_all_cache_entries $(select_resource ${RESOURCE})
+        ;;
+    create)
+        payload=$(ask_for_resource_info ${RESOURCE})
+    	create_resource ${RESOURCE} "${payload}"
+        ;;
+    create_entry)
+        resource_name=$(select_resource ${RESOURCE})
+        read -p "Enter entry name: " entry_name
+        read -p "Enter entry value: " entry_value
+        create_resource_entry ${RESOURCE} ${resource_name} ${entry_name} ${entry_value}
+        ;;
+    delete)
+        if [ "${RESOURCE}" = "api" ]; then
+           resource_name=$(select_resource ${RESOURCE})
+           delete_api ${resource_name}
+        else
+            resource_name=$(select_resource ${RESOURCE})
+            if [[ -n ${resource_name} ]]; then
+                delete_resource ${RESOURCE} ${resource_name}
+            else
+                echo "Nothing to delete"
+            fi
+        fi
+        ;;
+    fetch)
+        resource_name=$(select_resource ${RESOURCE})
+        get_resource_info ${RESOURCE} ${resource_name}
+        ;;
+    list)
+        list_resources ${RESOURCE}
+        ;;
+    undeploy)
+        resource_name=$(select_resource ${RESOURCE})
+        revision=$(get_api_deployed_revision_in_env ${resource_name})
+        if [[ -z ${revision} ]]; then
+            printf "No revision is deployed in \033[1;34m${ENVIRONMENT}\033[0m environment\n"
+        else
+            undeploy_api_revision ${resource_name} ${ENVIRONMENT} ${revision}
+        fi
+        ;;
+esac
